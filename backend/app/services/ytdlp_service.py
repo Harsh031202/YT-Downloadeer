@@ -2,6 +2,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 import yt_dlp
 
+from ..config import settings, get_cookie_file_path
 from ..models.schemas import FormatItem, VideoInfo
 from ..utils.formatting import format_bytes, format_duration
 
@@ -28,22 +29,54 @@ def clean_codec_name(codec_str: Optional[str]) -> str:
     return codec_str.split(".")[0].upper()
 
 
+def get_base_ydl_opts() -> Dict[str, Any]:
+    """Generate common yt-dlp options including cookies, proxy, and player clients."""
+    cookie_file = get_cookie_file_path()
+
+    extractor_args = {
+        "youtube": {
+            # Try multiple player clients: tv_embedded, android, ios, mweb, web
+            "player_client": ["tv_embedded", "android", "ios", "mweb", "web"],
+        }
+    }
+    if settings.YTDLP_PO_TOKEN:
+        extractor_args["youtube"]["po_token"] = [settings.YTDLP_PO_TOKEN]
+
+    opts: Dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "socket_timeout": 20,
+        "extractor_args": extractor_args,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    }
+
+    if cookie_file:
+        opts["cookiefile"] = cookie_file
+        logger.info("Using cookies file: %s", cookie_file)
+
+    if settings.PROXY_URL:
+        opts["proxy"] = settings.PROXY_URL
+        logger.info("Using proxy for yt-dlp requests")
+
+    return opts
+
+
 class YtDlpService:
     """Service to extract and normalize video metadata using yt-dlp."""
 
-    def __init__(self):
-        self.ydl_opts: Dict[str, Any] = {
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
-            "extract_flat": False,
-            "socket_timeout": 15,
-        }
-
     def extract_info(self, url: str) -> VideoInfo:
         """Extract metadata and return clean normalized format choices."""
+        ydl_opts = get_base_ydl_opts()
+        ydl_opts.update({
+            "skip_download": True,
+            "extract_flat": False,
+        })
+
         try:
-            with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
         except yt_dlp.utils.DownloadError as exc:
             msg = str(exc)
@@ -52,9 +85,9 @@ class YtDlpService:
             if "Video unavailable" in msg or "not available" in msg:
                 raise ValueError("This video is unavailable or has been removed.")
             if "Sign in" in msg or "bot" in msg.lower():
-                raise ValueError("YouTube requires authentication or flagged this request. Please try another video.")
+                raise ValueError("YouTube flagged this cloud server's IP address. To fix this on Render, export your YouTube cookies and set the YTDLP_COOKIES environment variable in Render Dashboard.")
             if "age" in msg.lower() and "restricted" in msg.lower():
-                raise ValueError("This video is age-restricted and cannot be processed.")
+                raise ValueError("This video is age-restricted and requires YouTube authentication cookies.")
             logger.warning("yt-dlp extraction error: %s", msg)
             raise ValueError("Could not retrieve video information. Please verify the URL.")
         except Exception as exc:

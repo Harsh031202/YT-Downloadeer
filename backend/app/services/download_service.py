@@ -10,6 +10,7 @@ from ..config import settings
 from ..utils.formatting import format_bytes
 from ..utils.security import sanitize_filename
 from .ffmpeg_service import ffmpeg_service
+from .ytdlp_service import get_base_ydl_opts
 
 logger = logging.getLogger(__name__)
 
@@ -132,22 +133,19 @@ class DownloadService:
                 })
 
         # Out template with safe sanitized title
-        # Output template in yt-dlp: %(title).80B restricts length safely
         out_tmpl = str(job_dir / "%(title).80B [%(id)s].%(ext)s")
 
         ffmpeg_dir = ffmpeg_service.get_ffmpeg_dir()
 
-        ydl_opts: Dict[str, Any] = {
+        ydl_opts = get_base_ydl_opts()
+        ydl_opts.update({
             "outtmpl": out_tmpl,
-            "quiet": True,
-            "no_warnings": True,
             "progress_hooks": [yt_progress_hook],
             "postprocessor_hooks": [yt_postprocessor_hook],
             "retries": 3,
             "socket_timeout": 30,
-            # Force IPv4 if desired to prevent IPv6 routing delays on some cloud providers
             "source_address": "0.0.0.0",
-        }
+        })
 
         if ffmpeg_dir:
             ydl_opts["ffmpeg_location"] = ffmpeg_dir
